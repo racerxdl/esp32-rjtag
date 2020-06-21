@@ -2,6 +2,8 @@
 
 import serial, time, struct, os, sys
 
+from commands import *
+
 device = "/dev/ttyUSB0"
 baudrate = 921600
 
@@ -24,13 +26,6 @@ ser.setDTR(False)
 time.sleep(0.1)
 ser.flushInput()
 ser.setDTR(True)
-
-CMD_START_SVF   = b'i'
-CMD_START_XSVF  = b'x'
-CMD_DATA        = b'd'
-CMD_STOP        = b's'
-CMD_QUERY       = b'q'
-CMD_PASSTHROUGH = b'p'
 
 offset = 0
 
