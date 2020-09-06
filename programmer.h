@@ -17,6 +17,7 @@
 #define CMD_STOP          's'
 #define CMD_SET_WIFI_SSID 'u'
 #define CMD_START_XSVF    'x'
+#define CMD_GET_STATE     'g'
 
 void ProgrammerLoop();
 void ProgrammerInit();

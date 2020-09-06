@@ -11,82 +11,190 @@
 
 #include "events.h"
 
+#include "program.h"
+#include "programmer.h"
+
 AsyncWebServer server(80);
+
+#define STATE_IDLE 1
+#define STATE_WAITING_PACKET 2
+#define STATE_BLOCK_READY 3
+
+struct ClientState {
+  uint8_t codeBuffer[BUFFER_SIZE];
+  size_t length;
+  uint8_t currentState;
+  AsyncWebSocketClient *currentClient;
+  int dataType;
+} cs;
+
+
+TaskHandle_t task_jtag;
+
+void vJTAG(void *pvParameters){
+  Serial.println("[INFO] JTAG Task Started");
+  int result = jtag_program_wifi(cs.dataType);
+  Serial.println("[INFO] JTAG Task Ended");
+  if (cs.currentClient != NULL) {
+    cs.currentClient->printf("[INFO] JTAG Result: %d", result);
+  }
+  vTaskDelete(NULL);
+}
+
+int fetch_next_block_wifi(uint8_t *buffer, int length) {
+  while (cs.currentState != STATE_BLOCK_READY) {
+    if (cs.currentState == STATE_IDLE) { // Close task
+      if (cs.currentClient != NULL) {
+        cs.currentClient->text("[ERROR] JTAG Stop Block fetching");
+      }
+      Serial.println("[ERROR] JTAG Stop Block fetching");
+      return 0;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1)); // Wait 10ms, that also yields the processor
+  }
+
+  if (cs.length > length) {
+    Serial.println("[ERROR] Data bigger than expected buffer size");
+    cs.currentClient->text("[ERROR] Data bigger than expected buffer size");
+    return -1;
+  }
+
+  int readBytes = 0;
+
+  while (readBytes < cs.length) {
+    buffer[readBytes] = cs.codeBuffer[readBytes];
+    readBytes++;
+  }
+
+  cs.currentState = STATE_WAITING_PACKET;
+
+  if (cs.currentClient != NULL) {
+    // cs.currentClient->text("[INFO] " + String(readBytes) + " bytes of data received...");
+    cs.currentClient->printf("[INFO] R%d", BUFFER_SIZE);
+  }
+  // Serial.println("[INFO] Received " + String(readBytes) + " bytes of data...");
+
+
+  return readBytes;
+  // return -1;
+}
+
+void onText(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len) {
+  data[len] = 0x00; // Ensure null-terminated
+  Serial.printf("[WS][%u]: %s\r\n", client->id(), data);
+  client->text("[ERROR] Thanks, but no text here...");
+}
+
+void notSupported(AsyncWebSocketClient *client, uint8_t cmd) {
+  client->printf("[ERROR] Command '%c' not supported...", cmd);
+}
+
+void notImplemented(AsyncWebSocketClient *client, uint8_t cmd) {
+  client->printf("[ERROR] Command '%c' not implemented...", cmd);
+}
+
+void cmdQuery(AsyncWebSocketClient *client) {
+  uint32_t chipId = jtag_chip_id();
+  client->printf("[INFO] Chip ID: %08x", chipId);
+}
+
+void cmdStop(AsyncWebSocketClient *client) {
+  Serial.println("[INFO] Stopping JTAG");
+  cs.currentState = STATE_IDLE;
+}
+
+void cmdReboot(AsyncWebSocketClient *client) {
+  Serial.println("[INFO] Received reboot");
+  client->text("[INFO] Received reboot");
+  ESP.restart();
+}
+
+void cmdStart(AsyncWebSocketClient *client, int dataType) {
+  client->text("[INFO] Starting JTAG");
+  Serial.println("[INFO] Starting JTAG");
+  cs.currentState = STATE_WAITING_PACKET;
+  cs.currentClient = client;
+  cs.dataType = dataType;
+  xTaskCreatePinnedToCore(vJTAG, "vJTAG", 10000, NULL, tskIDLE_PRIORITY, &task_jtag, 0);
+  client->printf("[INFO] R%d", BUFFER_SIZE);
+}
+
+void cmdData(AsyncWebSocketClient *client, uint8_t *data, size_t len) {
+  if (len > BUFFER_SIZE) {
+    client->printf("[ERROR] Max buffer length %d but got %d bytes in data packet.", BUFFER_SIZE, len);
+    cs.currentState = STATE_IDLE;
+    return;
+  }
+
+  cs.length = len;
+  memcpy(cs.codeBuffer, data, len);
+  cs.currentState = STATE_BLOCK_READY;
+}
+
+void onBinary(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len) {
+  uint8_t cmd = data[0];
+  // Serial.printf("[WS][%u]: Received command '%c'\r\n", client->id(), cmd);
+
+  switch (cmd) {
+    case CMD_DATA:
+      return cmdData(client, &data[3], len-3);
+    case CMD_SET_HOSTNAME:
+      return notImplemented(client, cmd);
+    case CMD_START_SVF:
+      return cmdStart(client, DATA_TYPE_SVF);
+    case CMD_SET_WIFI_PASS:
+    case CMD_SET_OTA_PASS:
+    case CMD_PASSTHROUGH:
+      return notImplemented(client, cmd);
+    case CMD_QUERY: return cmdQuery(client);
+    case CMD_REBOOT: return cmdReboot(client);
+    case CMD_STOP:
+      return cmdStop(client);
+    case CMD_SET_WIFI_SSID:
+      return notImplemented(client, cmd);
+    case CMD_START_XSVF:
+      return cmdStart(client, DATA_TYPE_XSVF);
+    case CMD_GET_STATE:
+    default:
+      return notSupported(client, cmd);
+  }
+}
 
 void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
   if(type == WS_EVT_CONNECT){
-    Serial.printf("[WS] [%s][%u] connect\n", server->url(), client->id());
-    client->printf("Hello Client %u :)", client->id());
-    client->ping();
+    Serial.printf("[WS][%u] connect\r\n", client->id());
+    client->printf("[INFO] Hello Client %u :)", client->id());
+    // client->ping();
   } else if(type == WS_EVT_DISCONNECT){
-    Serial.printf("[WS] [%s][%u] disconnect\n", server->url(), client->id());
+    cs.currentClient = NULL;
+    Serial.printf("[WS][%u] disconnect\r\n", client->id());
+    cmdStop(client);
   } else if(type == WS_EVT_ERROR){
-    Serial.printf("[WS] [%s][%u] error(%u): %s\n", server->url(), client->id(), *((uint16_t*)arg), (char*)data);
+    Serial.printf("[WS][%u] error(%u): %s\r\n", client->id(), *((uint16_t*)arg), (char*)data);
   } else if(type == WS_EVT_PONG){
-    Serial.printf("[WS] [%s][%u] pong[%u]: %s\n", server->url(), client->id(), len, (len)?(char*)data:"");
+    Serial.printf("[WS][%u] pong[%u]: %s\r\n", client->id(), len, (len)?(char*)data:"");
   } else if(type == WS_EVT_DATA){
     AwsFrameInfo * info = (AwsFrameInfo*)arg;
     String msg = "";
-    if(info->final && info->index == 0 && info->len == len){
-      //the whole message is in a single frame and we got all of it's data
-      Serial.printf("[WS] [%s][%u] %s-message[%llu]: ", server->url(), client->id(), (info->opcode == WS_TEXT)?"text":"binary", info->len);
-
-      if(info->opcode == WS_TEXT){
-        for(size_t i=0; i < info->len; i++) {
-          msg += (char) data[i];
-        }
+    if(info->final && info->index == 0 && info->len == len) {
+      if (info->opcode == WS_TEXT) {
+        onText(server, client, type, arg, data, len);
       } else {
-        char buff[3];
-        for(size_t i=0; i < info->len; i++) {
-          sprintf(buff, "%02x ", (uint8_t) data[i]);
-          msg += buff ;
-        }
+        onBinary(server, client, type, arg, data, len);
       }
-      Serial.printf("%s\n",msg.c_str());
-
-      if(info->opcode == WS_TEXT)
-        client->text("I got your text message");
-      else
-        client->binary("I got your binary message");
     } else {
       //message is comprised of multiple frames or the frame is split into multiple packets
-      if(info->index == 0){
-        if(info->num == 0)
-          Serial.printf("[WS] [%s][%u] %s-message start\n", server->url(), client->id(), (info->message_opcode == WS_TEXT)?"text":"binary");
-        Serial.printf("[WS] [%s][%u] frame[%u] start[%llu]\n", server->url(), client->id(), info->num, info->len);
-      }
-
-      Serial.printf("[WS] [%s][%u] frame[%u] %s[%llu - %llu]: ", server->url(), client->id(), info->num, (info->message_opcode == WS_TEXT)?"text":"binary", info->index, info->index + len);
-
-      if(info->opcode == WS_TEXT){
-        for(size_t i=0; i < len; i++) {
-          msg += (char) data[i];
-        }
-      } else {
-        char buff[3];
-        for(size_t i=0; i < len; i++) {
-          sprintf(buff, "%02x ", (uint8_t) data[i]);
-          msg += buff ;
-        }
-      }
-      Serial.printf("%s\n",msg.c_str());
-
-      if((info->index + len) == info->len){
-        Serial.printf("[WS] [%s][%u] frame[%u] end[%llu]\n", server->url(), client->id(), info->num, info->len);
-        if(info->final){
-          Serial.printf("[WS] [%s][%u] %s-message end\n", server->url(), client->id(), (info->message_opcode == WS_TEXT)?"text":"binary");
-          if(info->message_opcode == WS_TEXT)
-            client->text("I got your text message");
-          else
-            client->binary("I got your binary message");
-        }
-      }
+      if(info->message_opcode == WS_TEXT)
+        client->text("Multi-frame message. Not supported");
+      else
+        client->binary("Multi-frame message. Not supported");
     }
   }
 }
 
 
 void InitWebServer() {
+  cs.currentState = STATE_IDLE;
   MDNS.addService("http","tcp",80);
   SPIFFS.begin();
   websocket.onEvent(onWsEvent);
