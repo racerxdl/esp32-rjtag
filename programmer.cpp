@@ -68,10 +68,10 @@ void ProgrammerLoop() {
     ReadCmdLength(&cmd, &length);
     switch (cmd) {
       case CMD_START_SVF:
-        jtag_program(DATA_TYPE_SVF);
+        jtag_program(DATA_TYPE_SVF, MODE_SERIAL);
         break;
       case CMD_START_XSVF:
-        jtag_program(DATA_TYPE_XSVF);
+        jtag_program(DATA_TYPE_XSVF, MODE_SERIAL);
         break;
       case CMD_QUERY:
         Serial.print("[QUERY] Chip ID: ");

@@ -20,24 +20,40 @@ AsyncWebServer server(80);
 #define STATE_WAITING_PACKET 2
 #define STATE_BLOCK_READY 3
 
+#define MULTI_FRAME_SIZE (BUFFER_SIZE + 80)
+
 struct ClientState {
   uint8_t codeBuffer[BUFFER_SIZE];
   size_t length;
   uint8_t currentState;
   AsyncWebSocketClient *currentClient;
   int dataType;
+
+  // Multi-frame suport
+  uint8_t multiFrameBuffer[MULTI_FRAME_SIZE];
+  size_t multiFrameBufferPos;
+  uint8_t multiFrameValid;
+
+  // Running JTAG Task
+  uint8_t programming;
 } cs;
 
 
 TaskHandle_t task_jtag;
 
+uint8_t isWifiProgramming() {
+  return cs.programming;
+}
+
 void vJTAG(void *pvParameters){
+  cs.programming = 1;
   Serial.println("[INFO] JTAG Task Started");
-  int result = jtag_program_wifi(cs.dataType);
-  Serial.println("[INFO] JTAG Task Ended");
+  int result = jtag_program(cs.dataType, MODE_WIFI);
+  Serial.printf("[INFO] JTAG Task Ended with result %d\r\n", result);
   if (cs.currentClient != NULL) {
     cs.currentClient->printf("[INFO] JTAG Result: %d", result);
   }
+  cs.programming = 0;
   vTaskDelete(NULL);
 }
 
@@ -50,7 +66,7 @@ int fetch_next_block_wifi(uint8_t *buffer, int length) {
       Serial.println("[ERROR] JTAG Stop Block fetching");
       return 0;
     }
-    vTaskDelay(pdMS_TO_TICKS(1)); // Wait 10ms, that also yields the processor
+    delay(1); // Wait 1ms, that also yields the processor to other tasks
   }
 
   if (cs.length > length) {
@@ -73,7 +89,6 @@ int fetch_next_block_wifi(uint8_t *buffer, int length) {
     cs.currentClient->printf("[INFO] R%d", BUFFER_SIZE);
   }
   // Serial.println("[INFO] Received " + String(readBytes) + " bytes of data...");
-
 
   return readBytes;
   // return -1;
@@ -115,7 +130,7 @@ void cmdStart(AsyncWebSocketClient *client, int dataType) {
   cs.currentState = STATE_WAITING_PACKET;
   cs.currentClient = client;
   cs.dataType = dataType;
-  xTaskCreatePinnedToCore(vJTAG, "vJTAG", 10000, NULL, tskIDLE_PRIORITY, &task_jtag, 0);
+  xTaskCreatePinnedToCore(vJTAG, "vJTAG", 10000, NULL, tskIDLE_PRIORITY + 1, &task_jtag, 1);
   client->printf("[INFO] R%d", BUFFER_SIZE);
 }
 
@@ -183,11 +198,38 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
         onBinary(server, client, type, arg, data, len);
       }
     } else {
-      //message is comprised of multiple frames or the frame is split into multiple packets
-      if(info->message_opcode == WS_TEXT)
-        client->text("Multi-frame message. Not supported");
-      else
-        client->binary("Multi-frame message. Not supported");
+      if (info->index == 0) {
+        // Serial.printf("[WS][%u] Frame start %d\r\n", client->id(), info->len);
+        cs.multiFrameBufferPos = 0;
+        cs.multiFrameValid = 1;
+      }
+
+      if (!cs.multiFrameValid) {
+        Serial.println("[ERROR] Invalid piece of data");
+        client->text("[ERROR] Invalid piece of data");
+        return;
+      }
+
+      if (info->index + len > MULTI_FRAME_SIZE) {
+        client->printf("[ERROR] Current frame exceeds max storage capacity of %d.", MULTI_FRAME_SIZE);
+        cs.multiFrameValid = 0;
+        return;
+      }
+
+      memcpy(&cs.multiFrameBuffer[info->index], data, len);
+      cs.multiFrameBufferPos = info->index + len;
+      // Serial.printf("[WS][%u] Received %d bytes.\r\n", client->id(), cs.multiFrameBufferPos);
+
+      if(cs.multiFrameBufferPos == info->len){
+        // Serial.printf("[WS][%u] Frame end. Received %d bytes.\r\n", client->id(), cs.multiFrameBufferPos);
+        if (info->opcode == WS_TEXT) {
+          onText(server, client, type, arg, cs.multiFrameBuffer, cs.multiFrameBufferPos);
+        } else {
+          onBinary(server, client, type, arg, cs.multiFrameBuffer, cs.multiFrameBufferPos);
+        }
+        cs.multiFrameValid = 0;
+        cs.multiFrameBufferPos = 0;
+      }
     }
   }
 }
@@ -195,6 +237,8 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
 
 void InitWebServer() {
   cs.currentState = STATE_IDLE;
+  cs.programming = 0;
+
   MDNS.addService("http","tcp",80);
   SPIFFS.begin();
   websocket.onEvent(onWsEvent);
@@ -214,7 +258,7 @@ void InitWebServer() {
       Serial.printf("[WEB] UploadEnd: %s (%u)\n", filename.c_str(), index+len);
   });
 
-  server.onRequestBody([](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+  server.onRequestBody([](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
     if(!index)
       Serial.printf("[WEB] BodyStart: %u\n", total);
     Serial.printf("%s", (const char*)data);

@@ -18,30 +18,24 @@ struct buffer_state {
   int count;      // how many bytes in buffer
   int ptr;        // current reading pointer
   uint8_t blink;  // for the LED
+  uint8_t mode;
 } rd;
 
 int get_next_byte() {
   if(rd.ptr >= rd.count) {
     // refill the buffer and update content
     rd.ptr = 0;
-    rd.count = fetch_next_block(codeBuffer, BUFFER_SIZE);
+
+    if (rd.mode == MODE_SERIAL) {
+      rd.count = fetch_next_block(codeBuffer, BUFFER_SIZE);
+    } else {
+      rd.count = fetch_next_block_wifi(codeBuffer, BUFFER_SIZE);
+    }
+
     if(rd.count <= 0 || rd.count > BUFFER_SIZE) {
       return -1;
     }
-    digitalWrite(ledpin, (rd.blink++) & 1);
-  }
 
-  return codeBuffer[rd.ptr++];
-}
-
-int get_next_byte_wifi() {
-  if(rd.ptr >= rd.count) {
-    // refill the buffer and update content
-    rd.ptr = 0;
-    rd.count = fetch_next_block_wifi(codeBuffer, BUFFER_SIZE);
-    if(rd.count <= 0 || rd.count > BUFFER_SIZE) {
-      return -1;
-    }
     digitalWrite(ledpin, (rd.blink++) & 1);
   }
 
@@ -53,7 +47,7 @@ uint32_t jtag_chip_id() {
   return xsvftool_esp_id();
 }
 
-int jtag_program_wifi(int dataType) {
+int jtag_program(int dataType, uint8_t mode) {
   int retval = -1;
   if (dataType != DATA_TYPE_SVF && dataType != DATA_TYPE_XSVF) {
     Serial.println("[JTAG] Invalid data type");
@@ -72,45 +66,12 @@ int jtag_program_wifi(int dataType) {
 
   Serial.println("[JTAG] Waiting first block");
   rd.ptr = 0;
-  rd.count = fetch_next_block_wifi(codeBuffer, BUFFER_SIZE);
-
-  if (rd.count <= 0) {
-    Serial.println("[JTAG] No data available");
-    return retval;
+  rd.mode = mode;
+  if (mode == MODE_SERIAL) {
+    rd.count = fetch_next_block(codeBuffer, BUFFER_SIZE);
+  } else {
+    rd.count = fetch_next_block_wifi(codeBuffer, BUFFER_SIZE);
   }
-
-  Serial.println("[JTAG] Programming...");
-
-  pinMode(LED_BUILTIN, OUTPUT);
-  retval = xsvftool_esp_program(get_next_byte_wifi, dataType);
-  pinMode(LED_BUILTIN, INPUT);
-
-  Serial.print("[JTAG] Programming finished with status ");
-  Serial.println(retval);
-
-  return retval;
-}
-
-int jtag_program(int dataType) {
-  int retval = -1;
-  if (dataType != DATA_TYPE_SVF && dataType != DATA_TYPE_XSVF) {
-    Serial.println("[JTAG] Invalid data type");
-    return retval;
-  }
-
-  uint32_t chipId = xsvftool_esp_id();
-
-  if (!chipId) {
-    Serial.println("[JTAG] No devices found!");
-    return retval;
-  }
-
-  Serial.print("[JTAG] Found device ");
-  printf("%08x\n", chipId);
-
-  Serial.println("[JTAG] Waiting first block");
-  rd.ptr = 0;
-  rd.count = fetch_next_block(codeBuffer, BUFFER_SIZE);
 
   if (rd.count <= 0) {
     Serial.println("[JTAG] No data available");

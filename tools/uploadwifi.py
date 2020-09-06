@@ -25,7 +25,7 @@ async def queryChip(websocket):
     Queries the CHIP ID
   '''
   data = bytearray(CMD_QUERY + "\x00\x00", encoding="utf8")
-  print(f"> [CMD_QUERY]")
+  # print(f"> [CMD_QUERY]")
   await websocket.send(data)
   data = await websocket.recv()
   expectedPath = "[INFO] Chip ID:"
@@ -38,7 +38,7 @@ async def startXSVF(websocket):
     Start XSVF Transfer
   '''
   data = bytearray(CMD_START_XSVF + "\x00\x00", encoding="utf8")
-  print(f"> [CMD_START_XSVF]")
+  # print(f"> [CMD_START_XSVF]")
   await websocket.send(data)
 
 async def startSVF(websocket):
@@ -46,7 +46,7 @@ async def startSVF(websocket):
     Start SVF Transfer
   '''
   data = bytearray(CMD_START_SVF + "\x00\x00", encoding="utf8")
-  print(f"> [CMD_START_SVF]")
+  # print(f"> [CMD_START_SVF]")
   await websocket.send(data)
 
 async def putData(websocket, data):
@@ -78,34 +78,31 @@ async def WaitRequestLength(websocket):
 
 async def hello():
     uri = "ws://%s/ws" % ip
-    print(f"> Connecting to %s" % uri)
+    print(f"> [INFO] Connecting to %s" % uri)
     async with websockets.connect(uri) as websocket:
-      print(f"> Connected to %s" %uri)
+      print(f"> [INFO] Connected to %s" %uri)
       greeting = await websocket.recv()
       print(f"< {greeting}")
 
       chipId = await queryChip(websocket)
-      print(f"< Chip ID: %s" % chipId)
+      print(f"< [INFO] Chip ID: %s" % chipId)
 
-      print(f"> Starting SVF")
+      print(f"> [INFO] Starting SVF")
       await startSVF(websocket)
 
-      print(f"> Sending file %s" % filename)
+      print(f"> [INFO] Sending file %s" % filename)
       readBytes = 0
       start = time.time()
       while readBytes < filelen:
         reqLen = await WaitRequestLength(websocket)
-        if reqLen > 1024:
-          reqLen = 1024
         #print(f"Requested chunk length: %d" % reqLen)
         data = f.read(reqLen)
         readBytes += len(data)
-        sys.stdout.write("\r> Progress: %8d / %8d - %0.2f%%" % (readBytes, filelen, 100 * readBytes / filelen))
-        #print(f"> Sent %d from %d bytes" % (readBytes, filelen))
+        sys.stdout.write("\r> [INFO] Progress: %8d / %8d - %0.2f%%" % (readBytes, filelen, 100 * readBytes / filelen))
         await putData(websocket, data)
       delta = time.time() - start
-      print("\n> Took %f seconds to upload" % delta)
-    print("> Closing...")
+      print("\n> [INFO] Took %f seconds to upload" % delta)
+    print("> [INFO] Closing...")
     return None
 
 asyncio.get_event_loop().run_until_complete(hello())

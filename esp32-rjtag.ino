@@ -24,4 +24,7 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   ProgrammerLoop();
+  if (isWifiProgramming()) {
+    delay(1000); // Give enough time to programmer work
+  }
 }
