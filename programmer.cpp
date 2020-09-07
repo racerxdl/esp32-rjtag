@@ -20,12 +20,6 @@ void ReadCmdLength(uint8_t *cmd, int32_t *length) {
   for (int i = 3; i >= 0; i--) {
     dataLengthbytes[i] = Serial.read();
   }
-  #ifdef DEBUG
-  Serial.print("[INFO] CMD ");
-  Serial.print((char) *cmd);
-  Serial.print(" LENGTH ");
-  Serial.println(*length);
-  #endif
 }
 
 String ReadParam(int32_t length) {
@@ -135,12 +129,6 @@ int fetch_next_block(uint8_t *buffer, int length) {
   uint8_t cmd;
   int32_t dataLength;
   ReadCmdLength(&cmd, &dataLength);
-
-  #ifdef DEBUG
-  Serial.print("[CTRL] MReading ");
-  Serial.print(dataLength);
-  Serial.println(" bytes");
-  #endif
 
   if (dataLength <= 0) {
     return -1;

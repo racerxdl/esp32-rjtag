@@ -53,13 +53,13 @@ async def putData(websocket, data):
   '''
     Puts DATA into CMD_DATA queue
   '''
-  senddata = struct.pack(">BH", ord(CMD_DATA), 0)
+  senddata = struct.pack(">BH", ord(CMD_DATA), len(data))
   senddata += bytearray(data)
   #print(f"> [CMD_DATA]")
   await websocket.send(senddata)
 
 def GetRequestLength(data):
-  prefix = "[INFO] R"
+  prefix = "[CTRL] R"
   if len(data) < len(prefix):
     return 0
 
@@ -67,7 +67,7 @@ def GetRequestLength(data):
   return int(data)
 
 async def WaitRequestLength(websocket):
-  prefix = "[INFO] R"
+  prefix = "[CTRL] R"
   resp = ""
   while not prefix in str(resp):
     resp = await websocket.recv()
@@ -75,6 +75,15 @@ async def WaitRequestLength(websocket):
       raise Exception(resp)
     #print(f"< %s" % resp)
   return GetRequestLength(resp)
+
+async def Stop(websocket):
+  '''
+    Send STOP command
+  '''
+  senddata = struct.pack(">BH", ord(CMD_STOP), 0)
+  #print(f"> [CMD_DATA]")
+  await websocket.send(senddata)
+
 
 async def hello():
     uri = "ws://%s/ws" % ip
@@ -86,6 +95,8 @@ async def hello():
 
       chipId = await queryChip(websocket)
       print(f"< [INFO] Chip ID: %s" % chipId)
+
+      await Stop(websocket)
 
       print(f"> [INFO] Starting SVF")
       await startSVF(websocket)
@@ -102,7 +113,10 @@ async def hello():
         await putData(websocket, data)
       delta = time.time() - start
       print("\n> [INFO] Took %f seconds to upload" % delta)
-    print("> [INFO] Closing...")
+      print("> [INFO] Sending STOP")
+      time.sleep(2)
+      await Stop(websocket)
+    print("> [INFO] DONE...")
     return None
 
 asyncio.get_event_loop().run_until_complete(hello())

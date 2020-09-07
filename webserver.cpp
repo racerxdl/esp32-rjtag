@@ -13,6 +13,7 @@
 
 #include "program.h"
 #include "programmer.h"
+#include "netlog.h"
 
 AsyncWebServer server(80);
 
@@ -47,12 +48,9 @@ uint8_t isWifiProgramming() {
 
 void vJTAG(void *pvParameters){
   cs.programming = 1;
-  Serial.println("[INFO] JTAG Task Started");
+  Info("[INFO] JTAG Task Started\r\n");
   int result = jtag_program(cs.dataType, MODE_WIFI);
-  Serial.printf("[INFO] JTAG Task Ended with result %d\r\n", result);
-  if (cs.currentClient != NULL) {
-    cs.currentClient->printf("[INFO] JTAG Result: %d", result);
-  }
+  Info("[INFO] JTAG Result: %d\r\n", result);
   cs.programming = 0;
   vTaskDelete(NULL);
 }
@@ -60,18 +58,14 @@ void vJTAG(void *pvParameters){
 int fetch_next_block_wifi(uint8_t *buffer, int length) {
   while (cs.currentState != STATE_BLOCK_READY) {
     if (cs.currentState == STATE_IDLE) { // Close task
-      if (cs.currentClient != NULL) {
-        cs.currentClient->text("[ERROR] JTAG Stop Block fetching");
-      }
-      Serial.println("[ERROR] JTAG Stop Block fetching");
+      Debug("[DEBUG] JTAG Stop Block fetching\r\n");
       return 0;
     }
     delay(1); // Wait 1ms, that also yields the processor to other tasks
   }
 
   if (cs.length > length) {
-    Serial.println("[ERROR] Data bigger than expected buffer size");
-    cs.currentClient->text("[ERROR] Data bigger than expected buffer size");
+    Error("[ERROR] Data bigger than expected buffer size\r\n");
     return -1;
   }
 
@@ -85,10 +79,9 @@ int fetch_next_block_wifi(uint8_t *buffer, int length) {
   cs.currentState = STATE_WAITING_PACKET;
 
   if (cs.currentClient != NULL) {
-    // cs.currentClient->text("[INFO] " + String(readBytes) + " bytes of data received...");
-    cs.currentClient->printf("[INFO] R%d", BUFFER_SIZE);
+    cs.currentClient->printf("[CTRL] R%d", BUFFER_SIZE);
   }
-  // Serial.println("[INFO] Received " + String(readBytes) + " bytes of data...");
+  Debug("[INFO] Received %d bytes of data...\r\n", readBytes);
 
   return readBytes;
   // return -1;
@@ -96,47 +89,45 @@ int fetch_next_block_wifi(uint8_t *buffer, int length) {
 
 void onText(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len) {
   data[len] = 0x00; // Ensure null-terminated
-  Serial.printf("[WS][%u]: %s\r\n", client->id(), data);
+  Debug("[WS][%u]: %s\r\n", client->id(), data);
   client->text("[ERROR] Thanks, but no text here...");
 }
 
 void notSupported(AsyncWebSocketClient *client, uint8_t cmd) {
-  client->printf("[ERROR] Command '%c' not supported...", cmd);
+  Error("[ERROR] Command '%c' not supported...\r\n", cmd);
 }
 
 void notImplemented(AsyncWebSocketClient *client, uint8_t cmd) {
-  client->printf("[ERROR] Command '%c' not implemented...", cmd);
+  Error("[ERROR] Command '%c' not implemented...\r\n", cmd);
 }
 
 void cmdQuery(AsyncWebSocketClient *client) {
   uint32_t chipId = jtag_chip_id();
-  client->printf("[INFO] Chip ID: %08x", chipId);
+  Info("[INFO] Chip ID: %08x\r\n", chipId);
 }
 
 void cmdStop(AsyncWebSocketClient *client) {
-  Serial.println("[INFO] Stopping JTAG");
+  Info("[INFO] Stopping JTAG\r\n");
   cs.currentState = STATE_IDLE;
 }
 
 void cmdReboot(AsyncWebSocketClient *client) {
-  Serial.println("[INFO] Received reboot");
-  client->text("[INFO] Received reboot");
+  Info("[INFO] Received reboot\r\n");
   ESP.restart();
 }
 
 void cmdStart(AsyncWebSocketClient *client, int dataType) {
-  client->text("[INFO] Starting JTAG");
-  Serial.println("[INFO] Starting JTAG");
+  Info("[INFO] Starting JTAG\r\n");
   cs.currentState = STATE_WAITING_PACKET;
   cs.currentClient = client;
   cs.dataType = dataType;
   xTaskCreatePinnedToCore(vJTAG, "vJTAG", 10000, NULL, tskIDLE_PRIORITY + 1, &task_jtag, 1);
-  client->printf("[INFO] R%d", BUFFER_SIZE);
+  client->printf("[CTRL] R%d", BUFFER_SIZE);
 }
 
 void cmdData(AsyncWebSocketClient *client, uint8_t *data, size_t len) {
   if (len > BUFFER_SIZE) {
-    client->printf("[ERROR] Max buffer length %d but got %d bytes in data packet.", BUFFER_SIZE, len);
+    Error("[ERROR] Max buffer length %d but got %d bytes in data packet.\r\n", BUFFER_SIZE, len);
     cs.currentState = STATE_IDLE;
     return;
   }
@@ -148,7 +139,7 @@ void cmdData(AsyncWebSocketClient *client, uint8_t *data, size_t len) {
 
 void onBinary(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len) {
   uint8_t cmd = data[0];
-  // Serial.printf("[WS][%u]: Received command '%c'\r\n", client->id(), cmd);
+  Debug("[WS][%u]: Received command '%c'\r\n", client->id(), cmd);
 
   switch (cmd) {
     case CMD_DATA:
@@ -177,17 +168,16 @@ void onBinary(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTy
 
 void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
   if(type == WS_EVT_CONNECT){
-    Serial.printf("[WS][%u] connect\r\n", client->id());
+    Debug("[WS][%u] connect\r\n", client->id());
     client->printf("[INFO] Hello Client %u :)", client->id());
     // client->ping();
   } else if(type == WS_EVT_DISCONNECT){
     cs.currentClient = NULL;
-    Serial.printf("[WS][%u] disconnect\r\n", client->id());
-    cmdStop(client);
+    Debug("[WS][%u] disconnect\r\n", client->id());
   } else if(type == WS_EVT_ERROR){
-    Serial.printf("[WS][%u] error(%u): %s\r\n", client->id(), *((uint16_t*)arg), (char*)data);
+    Error("[WS][%u] error(%u): %s\r\n", client->id(), *((uint16_t*)arg), (char*)data);
   } else if(type == WS_EVT_PONG){
-    Serial.printf("[WS][%u] pong[%u]: %s\r\n", client->id(), len, (len)?(char*)data:"");
+    Debug("[WS][%u] pong[%u]: %s\r\n", client->id(), len, (len)?(char*)data:"");
   } else if(type == WS_EVT_DATA){
     AwsFrameInfo * info = (AwsFrameInfo*)arg;
     String msg = "";
@@ -199,29 +189,28 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
       }
     } else {
       if (info->index == 0) {
-        // Serial.printf("[WS][%u] Frame start %d\r\n", client->id(), info->len);
+        Debug("[WS][%u] Frame start %d\r\n", client->id(), info->len);
         cs.multiFrameBufferPos = 0;
         cs.multiFrameValid = 1;
       }
 
       if (!cs.multiFrameValid) {
-        Serial.println("[ERROR] Invalid piece of data");
-        client->text("[ERROR] Invalid piece of data");
+        Error("[ERROR] Invalid piece of data\r\n");
         return;
       }
 
       if (info->index + len > MULTI_FRAME_SIZE) {
-        client->printf("[ERROR] Current frame exceeds max storage capacity of %d.", MULTI_FRAME_SIZE);
+        Error("[ERROR] Current frame exceeds max storage capacity of %d.\r\n", MULTI_FRAME_SIZE);
         cs.multiFrameValid = 0;
         return;
       }
 
       memcpy(&cs.multiFrameBuffer[info->index], data, len);
       cs.multiFrameBufferPos = info->index + len;
-      // Serial.printf("[WS][%u] Received %d bytes.\r\n", client->id(), cs.multiFrameBufferPos);
+      Debug("[WS][%u] Received %d bytes.\r\n", client->id(), cs.multiFrameBufferPos);
 
       if(cs.multiFrameBufferPos == info->len){
-        // Serial.printf("[WS][%u] Frame end. Received %d bytes.\r\n", client->id(), cs.multiFrameBufferPos);
+        Debug("[WS][%u] Frame end. Received %d bytes.\r\n", client->id(), cs.multiFrameBufferPos);
         if (info->opcode == WS_TEXT) {
           onText(server, client, type, arg, cs.multiFrameBuffer, cs.multiFrameBufferPos);
         } else {
