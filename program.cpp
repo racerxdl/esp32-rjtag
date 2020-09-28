@@ -1,5 +1,7 @@
 #include "program.h"
 #include <Arduino.h>
+#include <ESPAsyncWebServer.h>
+#include "netlog.h"
 
 uint8_t codeBuffer[BUFFER_SIZE];
 
@@ -17,16 +19,24 @@ struct buffer_state {
   int count;      // how many bytes in buffer
   int ptr;        // current reading pointer
   uint8_t blink;  // for the LED
+  uint8_t mode;
 } rd;
 
 int get_next_byte() {
   if(rd.ptr >= rd.count) {
     // refill the buffer and update content
     rd.ptr = 0;
-    rd.count = fetch_next_block(codeBuffer, BUFFER_SIZE);
+
+    if (rd.mode == MODE_SERIAL) {
+      rd.count = fetch_next_block(codeBuffer, BUFFER_SIZE);
+    } else {
+      rd.count = fetch_next_block_wifi(codeBuffer, BUFFER_SIZE);
+    }
+
     if(rd.count <= 0 || rd.count > BUFFER_SIZE) {
       return -1;
     }
+
     digitalWrite(ledpin, (rd.blink++) & 1);
   }
 
@@ -38,40 +48,44 @@ uint32_t jtag_chip_id() {
   return xsvftool_esp_id();
 }
 
-int jtag_program(int dataType) {
+int jtag_program(int dataType, uint8_t mode) {
   int retval = -1;
   if (dataType != DATA_TYPE_SVF && dataType != DATA_TYPE_XSVF) {
-    Serial.println("[JTAG] Invalid data type");
+    Error("[JTAG] Invalid data type\r\n");
     return retval;
   }
 
   uint32_t chipId = xsvftool_esp_id();
 
   if (!chipId) {
-    Serial.println("[JTAG] No devices found!");
+    Error("[JTAG] No devices found!\r\n");
     return retval;
   }
 
-  Serial.print("[JTAG] Found device ");
-  printf("%08x\n", chipId);
+  Info("[JTAG] Found device %08x\r\n", chipId);
+  Info("[JTAG] Waiting first block\r\n");
 
-  Serial.println("[JTAG] Waiting first block");
   rd.ptr = 0;
-  rd.count = fetch_next_block(codeBuffer, BUFFER_SIZE);
+  rd.mode = mode;
+
+  if (mode == MODE_SERIAL) {
+    rd.count = fetch_next_block(codeBuffer, BUFFER_SIZE);
+  } else {
+    rd.count = fetch_next_block_wifi(codeBuffer, BUFFER_SIZE);
+  }
 
   if (rd.count <= 0) {
-    Serial.println("[JTAG] No data available");
+    Error("[JTAG] No data available\r\n");
     return retval;
   }
 
-  Serial.println("[JTAG] Programming...");
+  Info("[JTAG] Programming...\r\n");
 
   pinMode(LED_BUILTIN, OUTPUT);
   retval = xsvftool_esp_program(get_next_byte, dataType);
   pinMode(LED_BUILTIN, INPUT);
 
-  Serial.print("[JTAG] Programming finished with status ");
-  Serial.println(retval);
+  Info("[JTAG] Programming finished with status %d\r\n", retval);
 
   return retval;
 }

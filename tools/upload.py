@@ -2,6 +2,8 @@
 
 import serial, time, struct, os, sys
 
+from commands import *
+
 device = "/dev/ttyUSB0"
 baudrate = 921600
 
@@ -25,13 +27,6 @@ time.sleep(0.1)
 ser.flushInput()
 ser.setDTR(True)
 
-CMD_START_SVF   = b'i'
-CMD_START_XSVF  = b'x'
-CMD_DATA        = b'd'
-CMD_STOP        = b's'
-CMD_QUERY       = b'q'
-CMD_PASSTHROUGH = b'p'
-
 offset = 0
 
 def processCtrl(line):
@@ -48,10 +43,10 @@ def processCtrl(line):
     buff = f.read(length)
     # print("Read %d bytes" % len(buff))
     if len(buff) == 0:
-      ser.write(struct.pack(">BI", CMD_STOP[0], 0))
+      ser.write(struct.pack(">BI", ord(CMD_STOP[0]), 0))
       # print("\nFinished")
     else:
-      l = struct.pack(">BI", CMD_DATA[0], len(buff))
+      l = struct.pack(">BI", ord(CMD_DATA[0]), len(buff))
       ser.write(l)
       ser.write(buff)
     if offset > 0: # Skip progressing first block
@@ -73,6 +68,8 @@ qs = CMD_START_SVF + b'\x00\x00\x00\x00'
 
 qp = CMD_PASSTHROUGH + struct.pack(">I", 115200)
 
+start = None
+
 print("[HOST] Waiting ESP32 to be ready")
 while True:
   try:
@@ -82,9 +79,12 @@ while True:
     elif "[QUERY]" in line:
       print(line.strip())
       ser.write(qs)
+      start = time.time()
     elif "[JTAG]" in line:
       print(line.strip())
       if "Programming finished" in line:
+        delta = time.time() - start
+        print("[HOST] Took %f seconds to upload" % delta)
         print("[HOST] Enabling passthrough")
         ser.write(qp)
     elif "[CTRL]" in line:
@@ -97,9 +97,6 @@ while True:
   except UnicodeDecodeError as e:
     print(e)
     continue
-  except Exception as e:
-    raise e
-    break
 
 ser.close()             # close port
 f.close()
